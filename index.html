@@ -1,3 +1,4 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
 <title>Comin' in Hot</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap">
 <style>
@@ -545,6 +546,8 @@ function proj(wx,wy,wz,cx,cy,cz){let dz=wz-(cz-camBack);
   if(dz<=1)return null;const k=CAMD/dz;
   return {x:W/2+k*(wx-cx)*W/2,y:H*HZ-k*(wy-cy)*H/2,k}}
 const HZ=.4; // horizon height as a fraction of the screen
+// cockpit view: the whole road scene is shrunk into the windshield (top-centred), leaving room for the dashboard below
+const VIEWK=.76,viewX=()=>W*(1-VIEWK)/2;let sceneLate=0; // sceneLate: how many lateDraws belong to the (scaled) scene
 function text(t,x,y,size,col,align){s.font=`${size}px ${FONT}`;s.fillStyle=col;s.textAlign=align||'left';s.fillText(t,x,y)}
 
 // CARZ: road depth that projects to where the drawn car sits
@@ -1417,7 +1420,7 @@ function render(){lateDraws.length=0;
   // camera shake grows with speed, plus a low rumble wobble
   const shk=(st.speed/MAXS)*(1+beatPulse*.6)+st.shake*2, tt=performance.now()/1000;
   shakeX=(Math.random()-.5)*3*shk+Math.sin(tt*13)*1.2*shk; shakeY=(Math.random()-.5)*3*shk+Math.sin(tt*17.3)*1*shk;
-  s.save();s.translate(shakeX,shakeY);
+  s.save();s.translate(shakeX,shakeY);s.translate(viewX(),0);s.scale(VIEWK,VIEWK);
   const camY=CAMH+groundY(st.pos-camBack)+camUp+Math.sin(tt*9)*6*shk;
   // with the camera pulled back, the road starts a few segments behind the car; follow the bend
   // from there up to the car so the camera stays directly behind it
@@ -1676,9 +1679,187 @@ function render(){lateDraws.length=0;
     if(pk){st.carSY=pk.y;st.carSX=pk.x;st.carGpk={x:pk.x,y:pk.y}}if(pk&&st.grind){const rp=dz=>proj(carWX+bend(CARZ+dz),groundY(st.pos+CARZ+dz)+RAILH2,st.pos+CARZ+dz,camX,camY,st.pos);let q0=rp(-260);const pts=[];const og=st.carG&&st.carGpk?[st.carG[0]-st.carGpk.x,st.carG[1]-st.carGpk.y]:[0,0];for(const dz of [-358,-345,-330,-310,-285,-260,-200,-120,0,300,800,1600,3000,5000]){const q=rp(dz);if(q){const fz=Math.min(1,q.k/pk.k);q.x+=og[0]*fz;q.y+=og[1]*fz;pts.push(q)}}for(let i=1;i<pts.length;i++){const lw=Math.max(3,Math.min(30,pts[i-1].k*W*22));line(pts[i-1].x,pts[i-1].y,pts[i].x,pts[i].y,'#ffffff',lw);line(pts[i-1].x,pts[i-1].y,pts[i].x,pts[i].y,'#0a2a2a',lw*.35)}}const tl=st.grindTilt||0;if(tl&&pk){s.save();s.translate(W/2,pk.y);s.rotate(tl);s.translate(-W/2,-pk.y)}
     drawCar(pk?{dy:pk.y-y0,dx:pk.x-x0,k:pk.k/k0}:null);if(tl&&pk)s.restore()}else carMask=[];
   s.restore();
+  sceneLate=lateDraws.length;drawCockpit();
   hud();
 }
 let shakeX=0,shakeY=0;const lateDraws=[];
+// ---- rear-view mirror: the road streaming away behind the car, with the driver's head (from the webcam) on top ----
+const mcv=document.createElement('canvas'),mx2=mcv.getContext('2d');
+const mirrorOn=()=>st.mode==='race'||st.mode==='dead'||st.mode==='results';
+function mirrorRect(){const w=Math.min(W*.52,720),h=w/4.6;return {x:W/2-w/2,y:8,w,h}}
+// light sweeps across the glass: on every kill, a boss hit, inside the tunnel/mall lamps, and every couple of bars
+const sweeps=[];let swLastCombo=0,swLastBar=-1,swLastHp=null,swPrevT=performance.now();
+function updateSweeps(){const now=performance.now(),dt=Math.min(.05,(now-swPrevT)/1000);swPrevT=now;
+  const add=(col,speed=1.6)=>{if(sweeps.length<6)sweeps.push({p:-.3,col,speed})};
+  if(st.combo>swLastCombo)add(['#ff4fd8','#4fe8ff','#ffe14a','#39ff7a'][st.combo%4],2.2);swLastCombo=st.combo;
+  const bo=st.deer.find(d=>d.boss&&!d.hit);if(bo&&swLastHp!=null&&bo.hp<swLastHp)add('#ff3c8c',2.4);swLastHp=bo?bo.hp:null;
+  const inLamps=(theme.scenery==='cactus'||theme.sky==='city')&&inTun(Math.floor(st.pos/SEG)),every=inLamps?1:8,bar=Math.floor(beatNow()/every);
+  if(st.mode==='race'&&bar!==swLastBar){if(swLastBar>=0)add(inLamps?(theme.sky==='city'?'#ff4fd8':'#ffc070'):`rgb(${theme.grid})`,inLamps?2.6:1.2);swLastBar=bar}
+  for(const q of sweeps)q.p+=q.speed*dt;while(sweeps.length&&sweeps[0].p>1.3)sweeps.shift()}
+// ---- cockpit: windshield pillars either side of the shrunk road view, and a neon dashboard across the bottom ----
+function drawCockpit(){const top=H*.75,vx=viewX(),neon='#9b7bff',hi='#d8c8ff';
+  // the road view is shrunk into the glass: fade its left and right edges into the dark instead of a hard cut
+  for(const sd of [-1,1]){const x0=sd<0?0:W,x1=sd<0?vx+W*.06:W-vx-W*.06,gr=s.createLinearGradient(x0,0,x1,0);gr.addColorStop(0,'#000');gr.addColorStop(sd<0?vx/(vx+W*.06):vx/(vx+W*.06),'#000');gr.addColorStop(1,'rgba(0,0,0,0)');
+    s.fillStyle=gr;s.fillRect(Math.min(x0,x1),0,Math.abs(x1-x0),top+2)}
+  // the dash: a long gently curved top edge, rising a touch over the instrument binnacle in the middle
+  s.beginPath();s.moveTo(-2,H+2);s.lineTo(-2,top);
+  s.bezierCurveTo(W*.2,top+H*.004,W*.3,top-H*.035,W*.5,top-H*.04);s.bezierCurveTo(W*.7,top-H*.035,W*.8,top+H*.004,W+2,top);s.lineTo(W+2,H+2);s.closePath();
+  const g=s.createLinearGradient(0,top-H*.05,0,H);g.addColorStop(0,'#040108');g.addColorStop(1,'#000');s.fillStyle=g;s.fill();
+  s.strokeStyle=neon;s.lineWidth=3;s.stroke();s.strokeStyle=hi;s.lineWidth=1;s.stroke();
+  drawDashScore();drawCluster();drawRadio();drawWheelTop()}
+// 7-segment style readout: dim "8"s behind lit digits, like an old LCD/VFD
+function segText(str,x,y,size,col,align){s.font=`bold ${size}px ${FONT}`;s.textAlign=align||'left';s.fillStyle='rgba(57,255,122,.08)';s.fillText(str.replace(/[0-9]/g,'8'),x,y);s.fillStyle=col;s.fillText(str,x,y);s.textAlign='left'}
+// left of the wheel: score and shield readouts set into the dash
+function drawDashScore(){const x=W*.035,y=H*.86,w=W*.2,h=H*.115,fz=Math.min(H*.05,W*.035);
+  s.fillStyle='#000';s.strokeStyle='#3a2a6a';s.lineWidth=1.5;s.beginPath();s.roundRect(x,y,w,h,h*.15);s.fill();s.stroke();
+  text('SCORE',x+w*.06,y+h*.24,fz*.42,C.alert);segText(String(st.score).padStart(6,'0'),x+w*.06,y+h*.62,fz,'#39ff7a');
+  text('SHIELD',x+w*.06,y+h*.88,fz*.36,C.alert);
+  for(let i=0;i<3;i++){const on=i<3-st.hits,bx=x+w*.36+i*w*.15,by=y+h*.76;s.fillStyle=on?'#4fc8ff':'#0c1424';s.fillRect(bx,by,w*.12,h*.14)}}
+// instrument cluster behind the wheel (after the 80s digital dash): big green speed digits, a dotted rev arc, bar gauges, warning lamps
+function drawCluster(){const cx=W/2,x0=W*.36,x1=W*.64,y0=H*.78,y1=H*.97,t=performance.now()/1000,p=st.speed/MAXS;
+  s.fillStyle='#000';s.strokeStyle='#2a2050';s.lineWidth=1.5;s.beginPath();s.roundRect(x0,y0,x1-x0,y1-y0,H*.02);s.fill();s.stroke();
+  const kmh=Math.round(p*312),fz=H*.075;segText(String(kmh).padStart(3,' '),cx+W*.01,y0+H*.11,fz,'#39ff7a','right');
+  text('km/h',cx+W*.02,y0+H*.105,H*.022,'#39ff7a');
+  s.fillStyle=st.drift?'#ff3048':'#300';s.fillRect(cx-W*.065,y0+H*.12,W*.075,H*.006);
+  // rev arc: a dotted ramp of lamps from bottom-left to top-right, revving with speed and the beat
+  const rpm=Math.min(1,p*.85+beatPulse*.12+(st.jy>0?.1:0)),N=26;
+  for(let i=0;i<N;i++){const f=i/(N-1),xx=cx-W*.08+f*W*.19,yy=y1-H*.025-Math.pow(f,1.6)*H*.11,on=f<=rpm;
+    s.fillStyle=on?(f>.82?'#ff3048':f>.62?'#ffe14a':'#39ff7a'):'#0a1a0e';s.beginPath();s.arc(xx,yy,H*.004,0,Math.PI*2);s.fill()}
+  // left: two bar gauges (boost charge and combo heat); right: two more (shield and song progress)
+  const bar=(x,v,col,lbl)=>{const bh=H*.12,by=y0+H*.03;for(let k=0;k<10;k++){const on=k<v*10;s.fillStyle=on?col:'#0a140c';s.fillRect(x,by+bh-(k+1)*bh/10+1,W*.012,bh/10-2)}text(lbl,x-W*.003,by+bh+H*.02,H*.014,'#39ff7a')};
+  bar(x0+W*.012,st.charging?Math.min(1,st.chargeT/CHARGE):0,'#ffe14a','JMP');bar(x0+W*.035,Math.min(1,st.combo/10),'#ff9a3c','CMB');
+  bar(x1-W*.047,(3-st.hits)/3,'#4fc8ff','SHD');bar(x1-W*.024,ac&&sched&&song?Math.min(1,((ac.currentTime-songStart)%song.len)/song.len):0,'#39ff7a','SNG');
+  // warning lamps along the top
+  const lamps=[[st.drift,'#39ff7a'],[st.grind,'#4fc8ff'],[st.lava,'#ff3048'],[st.deer.some(d=>d.boss&&!d.hit),'#ff4fd8']];
+  lamps.forEach(([on,col],i)=>{s.fillStyle=on&&((t*4|0)%2||col!=='#ff3048')?col:'#101018';s.fillRect(cx-W*.04+i*W*.022,y0+H*.012,W*.015,H*.014)})}
+// centre console radio: a cassette deck with a green LCD scrolling the song, and the real time
+function drawRadio(){const x=W*.72,y=H*.80,w=W*.24,h=H*.16,t=performance.now()/1000;
+  s.fillStyle='#000';s.strokeStyle='#4fe8ff';s.lineWidth=1.5;s.beginPath();s.roundRect(x,y,w,h,h*.08);s.fill();s.stroke();
+  // LCD: song title scrolling right to left, clock on the right
+  const lx=x+w*.05,ly=y+h*.1,lw=w*.9,lh=h*.32,fz=lh*.62;s.fillStyle='#021208';s.fillRect(lx,ly,lw,lh);s.strokeStyle='#1a5a2a';s.lineWidth=1;s.strokeRect(lx,ly,lw,lh);
+  const d=new Date(),hh=d.getHours()%12||12,clock=`${hh}${(t*2|0)%2?':':' '}${String(d.getMinutes()).padStart(2,'0')}`;
+  s.font=`bold ${fz}px ${FONT}`;const cw=s.measureText('88:88').width;segText(clock,lx+lw-fz*.3,ly+lh*.74,fz,'#39ff7a','right');
+  const area=lw-cw-fz*.9,msg=`♪ ${SONGS[songIdx].title}   ·   `,mw=s.measureText(msg).width,off=(t*fz*2.2)%mw;
+  s.save();s.beginPath();s.rect(lx+fz*.3,ly,area,lh);s.clip();s.fillStyle='#39ff7a';s.font=`bold ${fz}px ${FONT}`;for(let k=0;k<3;k++)s.fillText(msg,lx+fz*.3-off+k*mw,ly+lh*.74);s.restore();
+  s.fillStyle='rgba(57,255,122,.6)';s.font=`${fz*.5}px ${FONT}`;s.fillText(st.mode==='race'?'PLAY  ▶':'STOP  ■',lx+fz*.3,ly-2);
+  // tape slot with the cassette inside, reels turning while the music plays
+  const sx=x+w*.18,sy=y+h*.5,sw=w*.64,sh=h*.36;s.strokeStyle='#4fe8ff';s.strokeRect(sx,sy,sw,sh);drawCassette(sx+sw*.2,sy+sh*.1,sw*.6);
+  // buttons either side of the slot
+  for(const bx of [x+w*.05,x+w*.86])for(let k=0;k<3;k++){s.strokeStyle='#2a6a8a';s.strokeRect(bx,sy+k*sh*.36,w*.09,sh*.26)}}
+// the top of the steering wheel, rising out of the bottom of the screen and turning with your steering
+function drawWheelTop(){const R=Math.min(H*.5,W*.4),cx=W/2,cy=H*.765+R,a=st.steer*.4;
+  s.save();s.translate(cx,cy);s.rotate(a);
+  s.lineCap='round';s.strokeStyle='#08060e';s.lineWidth=R*.11;s.beginPath();s.arc(0,0,R,Math.PI*1.08,Math.PI*1.92);s.stroke();
+  for(const [rr,col,w] of [[R+R*.055,'#c8d0ff',2],[R-R*.055,'#6a5aaa',1.5]]){s.strokeStyle=col;s.lineWidth=w;s.beginPath();s.arc(0,0,rr,Math.PI*1.08,Math.PI*1.92);s.stroke()}
+  // a marker stripe at twelve o'clock, so you can see the wheel turn
+  s.strokeStyle='#ff4fd8';s.lineWidth=R*.05;s.lineCap='butt';s.beginPath();s.arc(0,0,R,Math.PI*1.48,Math.PI*1.52);s.stroke();
+  s.restore()}
+// the hula girl dashboard toy (after the classic dashboard hula dancer): neon figure on a spring, teal grass skirt,
+// lei and flower crown, hips swaying to the beat and harder through bends. hulaHead is where her head ended up, for the speech bubble.
+const hulaHead={x:0,y:0,r:10};
+function drawHula(x,by,S,talking){const t=performance.now()/1000,u=S/100,beat=beatNow()*Math.PI,turn=(dice.a||0);
+  const sway=Math.sin(beat)*5+turn*10,lean=Math.sin(beat+.6)*.1+turn*.22,bob=Math.abs(Math.sin(beat))*2;
+  const tube=(pts,col,w,curve)=>{const draw=()=>{s.beginPath();s.moveTo(pts[0][0],pts[0][1]);if(curve&&pts.length>2){for(let i=1;i<pts.length-1;i++)s.quadraticCurveTo(pts[i][0],pts[i][1],(pts[i][0]+pts[i+1][0])/2,(pts[i][1]+pts[i+1][1])/2);s.lineTo(pts[pts.length-1][0],pts[pts.length-1][1])}else pts.slice(1).forEach(p=>s.lineTo(p[0],p[1]))};
+    s.lineCap='round';s.lineJoin='round';draw();s.strokeStyle=col;s.lineWidth=w*.9;s.stroke();draw();s.strokeStyle='rgba(255,255,255,.6)';s.lineWidth=w*.3;s.stroke()};
+  const SKIN='#ffb98a',HAIR='#c27bff',SKIRT='#2dffd2',BASE='#39ff7a',LEI='#ffe14a',FLOWER='#ff4fd8',TOP='#ff3048';
+  s.save();s.translate(x,by);s.scale(u,u);
+  // base: a little round grassy stand that says ALOHA
+  s.fillStyle='#000';s.beginPath();s.ellipse(0,0,22,6,0,0,Math.PI*2);s.fill();tube([[-22,0],[-22,4],[22,4],[22,0]],BASE,1.4);s.strokeStyle=BASE;s.lineWidth=1.4;s.beginPath();s.ellipse(0,0,22,6,0,0,Math.PI*2);s.stroke();
+  if(S>90){s.font=`bold 5px ${FONT}`;s.textAlign='center';s.fillStyle='#ffffff';s.fillText('ALOHA',0,3.4);s.textAlign='left'}
+  // spring under the feet
+  {const pts=[];for(let i=0;i<=8;i++)pts.push([(i%2?-4:4)+sway*.1*i/8,-2-i*1.6]);tube(pts,'#c8d8ff',.8)}
+  s.translate(sway*.15,-15-bob);
+  // legs up to the hips (the hips sway, the feet stay put), with flower anklets
+  const hx=sway*.6;tube([[-3,0],[hx-4,-16]],SKIN,1.2);tube([[3,0],[hx+4,-16]],SKIN,1.2);
+  for(const ax of [-3,3]){s.fillStyle=LEI;s.beginPath();s.arc(ax,-1.5,1.4,0,Math.PI*2);s.fill()}
+  // long hair falling down her back, drawn first so the body sits in front
+  s.save();s.translate(hx,-27);s.rotate(lean);
+  {const hy=-44,flow=Math.sin(beat*2)*2;for(let k=0;k<7;k++){const sx=-9+k*3;tube([[sx*.8,hy-6],[sx*1.15+flow*.3,hy+8],[sx*1.1+flow,hy+22]],HAIR,1.2,true)}}
+  s.restore();
+  // grass skirt: a fan of fringe strands from the hip band, flicking with the sway
+  for(let k=0;k<=12;k++){const f=k/12-.5,top=[hx+f*22,-26],w=Math.sin(beat*2+k)*1.5;tube([top,[hx+f*28+sway*.25+w,-8+Math.abs(f)*3]],SKIRT,.8)}
+  tube([[hx-11,-26],[hx,-28],[hx+11,-26]],SKIRT,1.4,true);
+  // body: waist up to the shoulders, leaning with the hips
+  s.save();s.translate(hx,-27);s.rotate(lean);
+  tube([[-9,0],[-6,-11],[-9,-25]],SKIN,1.3,true);tube([[9,0],[6,-11],[9,-25]],SKIN,1.3,true);tube([[-9,-25],[0,-27],[9,-25]],SKIN,1.2,true);
+  // bikini top
+  for(const sx of [-1,1])tube([[sx*1,-19],[sx*4.5,-23],[sx*8,-19],[sx*4.5,-16.5],[sx*1,-19]],TOP,1.1,true);
+  // lei of flower beads round her neck
+  for(let k=0;k<=10;k++){const a=Math.PI*(.12+.76*k/10);s.fillStyle=k%2?LEI:'#fff6c0';s.beginPath();s.arc(Math.cos(a)*-8.5,-26+Math.sin(a)*11,1.8,0,Math.PI*2);s.fill()}
+  // arms: one hand raised by her shoulder, waving; the other across her tummy, both rippling like a hula
+  const wv=Math.sin(beat*.5)*.6;tube([[-9,-24],[-17,-17+wv*3],[-16,-30+wv*5],[-13,-37+wv*6]],SKIN,1.2,true);
+  tube([[9,-24],[13,-14],[6,-9-wv*2],[-2,-10]],SKIN,1.2,true);
+  for(const [bx,by2] of [[-16,-30+wv*5],[9,-15]]){s.fillStyle=LEI;s.beginPath();s.arc(bx,by2,1.3,0,Math.PI*2);s.fill()} // bracelets
+  // head on a little spring neck: bobs with the beat and tilts into turns
+  const nod=Math.sin(beat*2)*2+turn*6;s.translate(nod*.3,-37-Math.abs(Math.sin(beat*2))*2);s.rotate(turn*.3+Math.sin(beat)*.1);
+  tube([[-2,9],[2,7.5],[-2,6],[2,4.5]],'#c8d8ff',.5);
+  s.fillStyle='#ffc9a0';s.beginPath();s.ellipse(0,-4,8.5,10,0,0,Math.PI*2);s.fill();
+  tube([[0,-14],[8,-10],[8.5,-2],[5,4.5],[0,6],[-5,4.5],[-8.5,-2],[-8,-10],[0,-14]],SKIN,1.2,true); // face
+  tube([[-8.5,-6],[-6,-14],[0,-15.5],[6,-14],[8.5,-6]],HAIR,1.4,true); // hairline
+  // happy closed eyes, rosy cheeks, and a red smile that opens while she talks
+  tube([[-5.5,-4],[-3.5,-5.5],[-1.5,-4]],'#000',.7,true);tube([[1.5,-4],[3.5,-5.5],[5.5,-4]],'#000',.7,true);
+  for(const cx of [-5,5]){s.fillStyle='rgba(255,90,140,.35)';s.beginPath();s.arc(cx,-1,1.6,0,Math.PI*2);s.fill()}
+  const open=talking?(Math.sin(t*22)*.5+.5)*2.2:0;tube([[-3,1],[0,2.5+open],[3,1]],'#ff3c6c',.9,true);if(open>.5)tube([[-2.4,1.3],[2.4,1.3]],'#ff3c6c',.5);
+  // flower crown
+  for(let k=0;k<7;k++){const a=Math.PI*(1.1+.8*k/6);s.fillStyle=k%2?FLOWER:LEI;s.beginPath();s.arc(Math.cos(a)*9.5,-6+Math.sin(a)*10,2,0,Math.PI*2);s.fill()}
+  const mtx=s.getTransform(),dpr=DPR;hulaHead.x=mtx.e/dpr;hulaHead.y=mtx.f/dpr;hulaHead.r=9*u;
+  s.restore();s.restore()}
+// fuzzy dice hanging under the mirror: a damped pendulum pushed by the road's bends and your steering
+const dice={a:0,v:0};
+function updateDice(dt){const cv2=segAt(st.pos+CARZ).curve,target=Math.max(-.9,Math.min(.9,-cv2*.9-st.steer*.25-(st.drift?st.yaw*.4:0)));
+  dice.v+=((target-dice.a)*30-dice.v*2.2)*dt;dice.v+=(Math.random()-.5)*st.shake*3*dt;dice.a+=dice.v*dt}
+function drawDie(cx,cy,sz,ang,col,face){s.save();s.translate(cx,cy);s.rotate(ang);s.shadowColor=col;s.shadowBlur=sz*.6;
+  s.fillStyle='#05000a';s.strokeStyle=col;s.lineWidth=Math.max(1.5,sz*.08);s.beginPath();s.roundRect(-sz/2,-sz/2,sz,sz,sz*.2);s.fill();s.stroke();
+  // a hint of depth: the top and side faces
+  s.globalAlpha=.6;s.beginPath();s.moveTo(-sz/2,-sz/2);s.lineTo(-sz*.3,-sz*.72);s.lineTo(sz*.7,-sz*.72);s.lineTo(sz/2,-sz/2);s.moveTo(sz*.7,-sz*.72);s.lineTo(sz*.7,sz*.28);s.lineTo(sz/2,sz/2);s.stroke();s.globalAlpha=1;
+  s.fillStyle=col;const P={1:[[0,0]],2:[[-1,-1],[1,1]],3:[[-1,-1],[0,0],[1,1]],4:[[-1,-1],[1,-1],[-1,1],[1,1]],5:[[-1,-1],[1,-1],[0,0],[-1,1],[1,1]],6:[[-1,-1],[1,-1],[-1,0],[1,0],[-1,1],[1,1]]}[face];
+  for(const [u,v] of P){s.beginPath();s.arc(u*sz*.26,v*sz*.26,sz*.08,0,Math.PI*2);s.fill()}s.restore()}
+const eyeView={}; // smoothed head box, so the zoom doesn't jitter
+function drawMirrorView(mw,mh){const g=mx2,hy=mh*.38,N=70,D0=SEG*1.2,ocean=theme.ground==='ocean';
+  g.fillStyle='#000';g.fillRect(0,0,mw,mh);
+  for(let i=0;i<24;i++){const [x,y,b]=stars[i];g.fillStyle=`rgba(200,210,255,${.25+b*.5})`;g.fillRect(x*mw,y*hy*1.6,1.2,1.2)}
+  g.strokeStyle=`rgba(${theme.grid},.5)`;g.lineWidth=1;g.beginPath();g.moveTo(0,hy);g.lineTo(mw,hy);g.stroke();
+  // road behind: follow the bends of the segments already driven, nearest first, then draw far to near
+  const base=Math.floor(st.pos/SEG),pct=(st.pos%SEG)/SEG,L=segs.length,rows=[];let x=0,dx=0;
+  for(let n=0;n<=N;n++){const i=(((base-n)%L)+L)%L,d=(n+pct)*SEG+CARZ*.5,k=Math.min(1.4,D0/d),hw=mw*.5*k;
+    rows.push({i,y:hy+(mh-hy)*k,hw,cx:mw/2+(x-st.x*ROADW)*hw/ROADW,ga:Math.max(.05,1-n/N)});x+=dx;dx+=segs[i].curve*6}
+  const ln=(x1,y1,x2,y2,c,w)=>{g.strokeStyle=c;g.lineWidth=w;g.beginPath();g.moveTo(x1,y1);g.lineTo(x2,y2);g.stroke()};
+  for(let n=N;n>0;n--){const a=rows[n],b=rows[n-1],ga=a.ga.toFixed(2);
+    if(ocean){if(a.i%3===0)ln(0,a.y,mw,a.y,`rgba(${theme.grid},${ga})`,1);continue}
+    if(a.i%6===0)ln(0,a.y,mw,a.y,`rgba(${theme.grid},${ga*.6})`,1);
+    g.fillStyle='#000';g.beginPath();g.moveTo(a.cx-a.hw*1.16,a.y);g.lineTo(b.cx-b.hw*1.16,b.y);g.lineTo(b.cx+b.hw*1.16,b.y);g.lineTo(a.cx+a.hw*1.16,a.y);g.fill();
+    const rc=`rgba(170,250,255,${ga})`;ln(a.cx-a.hw,a.y,b.cx-b.hw,b.y,rc,1.6);ln(a.cx+a.hw,a.y,b.cx+b.hw,b.y,rc,1.6);
+    if(a.i%10<5){const rr=`rgba(255,59,59,${ga})`;ln(a.cx-a.hw*1.12,a.y,b.cx-b.hw*1.12,b.y,rr,1.2);ln(a.cx+a.hw*1.12,a.y,b.cx+b.hw*1.12,b.y,rr,1.2)}
+    if(a.i%12<6)for(let l=1;l<LANES;l++){const f=-1+2*l/LANES;ln(a.cx+a.hw*f,a.y,b.cx+b.hw*f,b.y,`rgba(255,225,74,${ga})`,1.4)}}
+  // the driver's head: zoomed so the eye line runs across the middle, flipped like a real mirror
+  const head=window.headCanvas,box=window.headBox;
+  if(head&&head.width&&box){for(const k in box)eyeView[k]=eyeView[k]===undefined?box[k]:eyeView[k]*.85+box[k]*.15;
+    const b=eyeView,sc2=(mh*3.6)/((b.y1-b.y0)*head.height),ex=(b.x0+b.x1)/2*head.width,ey=(b.y0+(b.y1-b.y0)*.5)*head.height;
+    g.save();g.translate(mw/2,mh/2);g.scale(-sc2,sc2);g.drawImage(head,-ex,-ey);g.restore()}
+  // light sweeping across the glass: a soft coloured diagonal band with a bright core
+  g.save();g.globalCompositeOperation='lighter';
+  for(const q of sweeps){const x=q.p*(mw+mh*2)-mh,gr=g.createLinearGradient(x-mh*.6,0,x+mh*.6,0);
+    gr.addColorStop(0,'rgba(0,0,0,0)');gr.addColorStop(.42,q.col);gr.addColorStop(.5,'#ffffff');gr.addColorStop(.58,q.col);gr.addColorStop(1,'rgba(0,0,0,0)');
+    g.globalAlpha=.55;g.fillStyle=gr;g.beginPath();g.moveTo(x-mh*.9,mh);g.lineTo(x-mh*.3,0);g.lineTo(x+mh*.3,0);g.lineTo(x-mh*.3+mh*.0,mh);g.closePath();g.fill()}
+  g.restore();
+  // compass letter glowing in the top-right corner of the glass
+  const nf=mh*.2;g.save();g.font=`bold ${nf}px ${FONT}`;g.textAlign='center';g.textBaseline='middle';g.shadowColor='#4fe8ff';g.shadowBlur=nf*.8;
+  g.fillStyle='#bff6ff';const nx=mw-mh*.42,ny=mh*.26;g.fillText('N',nx,ny);g.shadowBlur=nf*.3;g.fillText('N',nx,ny);g.restore()}
+function drawMirror(){const R=mirrorRect(),pw=Math.round(R.w*DPR),ph2=Math.round(R.h*DPR);
+  if(mcv.width!==pw||mcv.height!==ph2){mcv.width=pw;mcv.height=ph2}
+  // paused: keep the last mirror frame (glass, head, sweeps) and hold the dice where they hung
+  const resized=mcv.dataset.w!==String(pw);mcv.dataset.w=pw;
+  if(!paused||resized){updateSweeps();mx2.setTransform(DPR,0,0,DPR,0,0);drawMirrorView(R.w,R.h)}
+  s.save();s.beginPath();s.roundRect(R.x,R.y,R.w,R.h,R.h*.4);s.save();s.clip();s.drawImage(mcv,R.x,R.y,R.w,R.h);s.restore();
+  s.strokeStyle='#222';s.lineWidth=6;s.stroke();s.strokeStyle=C.road;s.lineWidth=1.5;s.stroke();s.restore();
+  // the dice hang from the mirror's lower edge, left of centre, on strings of slightly different lengths
+  const real=performance.now(),dt=Math.min(.05,(real-(dice.t||real))/1000);dice.t=real;
+  if(!paused){dice.clock=(dice.clock||0)+dt*1000;if(st.mode==='race')updateDice(dt)}const now=dice.clock||0;
+  const ax=R.x+R.w*.3,ay=R.y+R.h,sz=R.h*.32;
+  for(const [off,len,col,face,lag] of [[-sz*.35,R.h*.55,'#ff4fd8',5,1],[sz*.45,R.h*.8,'#4fe8ff',3,.8]]){
+    const a=dice.a*lag+Math.sin(now/700+off)*.04,ex=ax+off+Math.sin(a)*len,ey=ay+Math.cos(a)*len;
+    s.strokeStyle='#ffffff';s.globalAlpha=.7;s.lineWidth=1.2;s.beginPath();s.moveTo(ax+off*.3,ay);s.lineTo(ex,ey);s.stroke();s.globalAlpha=1;
+    drawDie(ex,ey+sz*.45,sz,a+Math.sin(now/500+off)*.1,col,face)}}
 // lateral offset of the road centre at a given distance ahead, so scenery and enemies follow the bends
 const bendX=[];let bendBase=0;
 function bend(dz){const z=st.pos+dz,n=Math.floor(z/SEG)-bendBase,f=(z%SEG)/SEG;
@@ -1690,18 +1871,12 @@ function hud(){
   if(st.mode==='title'){const lw=Math.min(W*.7,H*.9);drawLogo(W/2,H*.16,lw);
     text('D TO JUMP  -  F TO ATTACK',W/2,H*.31,fs*1.1,'#4fe8ff','center');
     if((performance.now()/500|0)%2)text('PRESS ENTER / TAP TO START',W/2,H*.5,fs,C.yel,'center');return}
-  text('SCORE',m,m+fs,fs*.8,C.alert);text(String(st.score).padStart(6,'0'),m,m+fs*2,fs*1.3,C.hud);
+  // score, shields, speed and the song now live on the dashboard (drawCockpit); the key help hides while racing so it doesn't cover the dash
+  document.getElementById('help').style.opacity=st.mode==='race'?0:'';
   text('HIGH SCORE',W-m,m+fs,fs*.8,C.alert,'right');text(String(Math.max(st.best,st.score)).padStart(6,'0'),W-m,m+fs*2,fs*1.3,C.hud,'right');
-  text('WAVE',W/2,m+fs*.8,fs*.8,C.alert,'center');text(String(Math.max(1,st.wave)),W/2,m+fs*2.4,fs*2,C.yel,'center');
-  // gauge
-  const kmh=Math.round(st.speed/MAXS*312);
-  text(`${kmh} KM/H`,W-m,H-m-fs*1.2,fs,C.road,'right');
-  drawCassette(m,H-m-fs*1.85,fs*1.6);text(SONGS[songIdx].title,m+fs*1.9,H-m-fs*1.2,fs*.8,C.road);
-  // shields: one pip lost per laser hit
-  text('SHIELD',m,m+fs*3.4,fs*.7,C.alert);
-  for(let i=0;i<3;i++){const on=i<3-st.hits;s.strokeStyle=on?'#4fc8ff':'#2a3550';s.lineWidth=2;s.strokeRect(m+i*fs*1.1,m+fs*3.8,fs*.8,fs*.5);if(on){s.fillStyle='#4fc8ff';s.fillRect(m+i*fs*1.1+3,m+fs*3.8+3,fs*.8-6,fs*.5-6)}}
-  const gw=Math.min(220,W*.3);s.strokeStyle=C.road;s.lineWidth=1.5;s.strokeRect(W-m-gw,H-m-fs*.8,gw,fs*.4);
-  s.fillStyle=C.road;s.fillRect(W-m-gw+2,H-m-fs*.8+2,(gw-4)*st.speed/MAXS,fs*.4-4);
+  // the rear-view mirror sits at the top centre; the centre column (wave, boss bar, taunts) moves down under it
+  const mo=mirrorOn()?mirrorRect().h+4:0;if(mo)lateDraws.push(drawMirror);
+  text('WAVE',W/2,m+fs*.8+mo,fs*.8,C.alert,'center');text(String(Math.max(1,st.wave)),W/2,m+fs*2.4+mo,fs*2,C.yel,'center');
   if(st.msgT>0&&st.mode!=='title'&&st.mode!=='results')text(st.msg,W/2,H*.38,fs*1.5,st.msg.startsWith('HIT')||st.msg==='WRECKED!'?C.alert:C.yel,'center');
   // red edge flash after taking a hit
   if(st.hurt>0){const g=s.createRadialGradient(W/2,H/2,Math.min(W,H)*.3,W/2,H/2,Math.max(W,H)*.7);g.addColorStop(0,'rgba(255,0,30,0)');g.addColorStop(1,`rgba(255,0,30,${.55*st.hurt})`);s.fillStyle=g;s.fillRect(0,0,W,H)}
@@ -1774,7 +1949,7 @@ function hud(){
     if((performance.now()/450|0)%2)text("PRESS 'L' FOR NEXT LEVEL",W/2,cy+ch-fs*.7,fs*.9,'#ff3cf0','center');
     s.restore()}
   // boss taunt bubble, under the boss health bar
-  if(bossBubble&&st.mode==='race')lateDraws.push(()=>{const b=bossBubble;if(!b)return;const bfs=fs*.9;s.font=`bold ${bfs}px ${FONT}`;const tw=s.measureText(b.t).width,pad=bfs*.6,bw=tw+pad*2,bh=bfs*1.9,bx=W/2-bw/2,by=m+fs*4.1;
+  if(bossBubble&&st.mode==='race')lateDraws.push(()=>{const b=bossBubble;if(!b)return;const bfs=fs*.9;s.font=`bold ${bfs}px ${FONT}`;const tw=s.measureText(b.t).width,pad=bfs*.6,bw=tw+pad*2,bh=bfs*1.9,bx=W/2-bw/2,by=m+fs*4.1+mo;
     s.fillStyle='#000';s.strokeStyle='#ff3c8c';s.lineWidth=2.5;s.beginPath();s.roundRect(bx,by,bw,bh,bh*.2);s.fill();s.stroke();
     s.beginPath();s.moveTo(W/2-bh*.3,by+1);s.lineTo(W/2,by-bh*.5);s.lineTo(W/2+bh*.3,by+1);s.fill();s.stroke();text(b.t,bx+pad,by+bh*.66,bfs,'#ff9ac0')});
   // results card after a wreck
@@ -1794,15 +1969,16 @@ function hud(){
   // drawn after the glow pass (lateDraws) so the portrait lines stay crisp
   // driver portrait: always on, in a square in the bottom-left corner above the song title; the bubble pops out beside it
   // the portrait now draws in the main glowing layer (same CRT glow as the car); only its speech bubble stays crisp
-  if(st.mode==='race'||st.mode==='dead'||st.mode==='results'){const AS=Math.min(fs*7.6,H*.3),ax0=m,ay0=H-m-fs*2.3-AS;s.globalAlpha=.68;drawAvatar(ax0,ay0,AS,!!bubble&&bubble.life>.3);s.globalAlpha=1}
-  if(st.mode==='race'||st.mode==='dead'||st.mode==='results')lateDraws.push(()=>{const AS=Math.min(fs*7.6,H*.3),ax0=m,ay0=H-m-fs*2.3-AS;
+  // the gorilla is now a little neon hula toy bobbing on the dashboard; his speech bubble pops out beside his head
+  if(st.mode==='race'||st.mode==='dead'||st.mode==='results')lateDraws.push(()=>drawHula(W*.13,H*.85,H*.3,!!bubble&&bubble.life>.3)); // crisp layer, so the little figure doesn't bloom out
+  if(st.mode==='race'||st.mode==='dead'||st.mode==='results')lateDraws.push(()=>{
     if(!bubble||st.mode!=='race')return;
-    const pop=Math.min(1,(2.2-bubble.life)*8),bfs=fs*.85*pop,ar=AS*.5,ax=ax0+AS*.62,ay=ay0+AS*.62;
+    const pop=Math.min(1,(2.2-bubble.life)*8),bfs=fs*.85*pop,ax=hulaHead.x+hulaHead.r*.6,ay=hulaHead.y+hulaHead.r*.5;
     s.font=`bold ${bfs}px ${FONT}`;const tw=s.measureText(bubble.t).width,pad=bfs*.6,bw=tw+pad*2,bh=bfs*1.9;
-    const bx=Math.min(W-bw-m,ax0+AS+fs*.6),by=ay0+AS*.1;
+    const bx=Math.min(W-bw-m,hulaHead.x+hulaHead.r*2.2),by=hulaHead.y-bh*1.2;
     s.fillStyle='#000';s.strokeStyle='#e8fbff';s.lineWidth=2.5;s.beginPath();s.roundRect(bx,by,bw,bh,bh*.35);s.fill();s.stroke();
-    // tail pointing back at the avatar's mouth
-    s.beginPath();s.moveTo(bx+1,by+bh*.45);s.lineTo(ax+ar*.75,ay-ar*.05);s.lineTo(bx+1,by+bh*.8);s.closePath();s.fill();s.stroke();
+    // tail pointing back at the toy's mouth
+    s.beginPath();s.moveTo(bx+1,by+bh*.45);s.lineTo(ax,ay);s.lineTo(bx+1,by+bh*.8);s.closePath();s.fill();s.stroke();
     s.fillStyle='#000';s.fillRect(bx-2,by+bh*.47,5,bh*.31);
     text(bubble.t,bx+pad,by+bh*.66,bfs,'#e8fbff')});
   // note streak counter, bottom centre
@@ -1812,7 +1988,7 @@ function hud(){
   if(st.combo>1&&st.mode==='race'){const bw2=fs*4,bx2=W*.16-bw2/2,by2=H*.5+fs*1.5,fr2=Math.max(0,st.comboT/COMBOT);
     s.strokeStyle=C.road;s.lineWidth=1.5;s.strokeRect(bx2,by2,bw2,fs*.35);s.fillStyle=fr2<.3?C.alert:C.yel;s.fillRect(bx2+2,by2+2,(bw2-4)*fr2,fs*.35-4)}
   // boss health
-  {const bo=st.deer.find(d=>d.boss&&!d.hit);if(bo&&st.mode==='race'){const bw3=Math.min(W*.4,320),bx3=W/2-bw3/2,by3=m+fs*3.1;
+  {const bo=st.deer.find(d=>d.boss&&!d.hit);if(bo&&st.mode==='race'){const bw3=Math.min(W*.4,320),bx3=W/2-bw3/2,by3=m+fs*3.1+mo;
     text('BOSS',W/2,by3-4,fs*.7,'#ff3c8c','center');s.strokeStyle='#ff3c8c';s.lineWidth=1.5;s.strokeRect(bx3,by3,bw3,fs*.45);
     for(let i=0;i<bo.maxhp;i++)if(i<bo.hp){s.fillStyle='#ff3c8c';s.fillRect(bx3+3+i*(bw3-6)/bo.maxhp,by3+3,(bw3-6)/bo.maxhp-3,fs*.45-6)}}}
   // song progress along the top edge
@@ -1864,7 +2040,7 @@ function composite(){
   // phosphor persistence: old frame decays instead of vanishing, leaving trails
   pc.globalCompositeOperation='source-over';pc.globalAlpha=1;pc.fillStyle=reduce?'#000':'rgba(0,0,0,.42)';pc.fillRect(0,0,ph.width,ph.height);
   // the car body blocks old phosphor trails too
-  pc.setTransform(DPR,0,0,DPR,0,0);pc.fillStyle='#000';
+  pc.setTransform(DPR,0,0,DPR,0,0);pc.transform(VIEWK,0,0,VIEWK,viewX(),0);pc.fillStyle='#000';
   for(const m of carMask){pc.beginPath();m.forEach((q,i)=>i?pc.lineTo(q[0],q[1]):pc.moveTo(q[0],q[1]));pc.fill()}
   pc.setTransform(1,0,0,1,0,0);
   pc.globalCompositeOperation='lighter';
@@ -1888,7 +2064,7 @@ function composite(){
   // late layer (enemies, bolts, avatar): drawn over the main glow so they stay readable, but given their
   // own lighter CRT treatment (soft bloom, the same flicker and jitter, scanlines below) so they belong to the screen
   if(lateDraws.length){lx2.setTransform(1,0,0,1,0,0);lx2.clearRect(0,0,lc.width,lc.height);const sv=s;s=lx2;
-    lx2.setTransform(DPR,0,0,DPR,shakeX*DPR,shakeY*DPR);for(const f of lateDraws)f();lx2.setTransform(1,0,0,1,0,0);s=sv;
+    lx2.setTransform(DPR,0,0,DPR,shakeX*DPR,shakeY*DPR);lateDraws.forEach((f,i)=>{if(i<sceneLate){lx2.save();lx2.transform(VIEWK,0,0,VIEWK,viewX(),0);f();lx2.restore()}else f()});lx2.setTransform(1,0,0,1,0,0);s=sv;
     ctx.globalCompositeOperation='lighter';ctx.globalAlpha=.32*fl;ctx.drawImage(blurSmall(g4,lc,22*DPR),jx,jy,CW,CH);
     ctx.globalAlpha=.75*fl;ctx.drawImage(blurSmall(g2,lc,7*DPR),jx,jy,CW,CH);
     ctx.globalAlpha=.7;ctx.drawImage(blurSmall(g2b,lc,2*DPR),jx,jy,CW,CH);ctx.globalAlpha=Math.min(1,.88+.12*fl);
@@ -1913,3 +2089,31 @@ function frame(now){const dt=Math.min(.05,(now-last)/1000);last=now;
 requestAnimationFrame(frame);
 })();
 </script>
+<script type="module">
+// Rear-view mirror camera: cut the driver's head (hair + face) out of the webcam with MediaPipe's multiclass
+// selfie segmenter and publish it as window.headCanvas, plus its bounding box (window.headBox) to frame the eyes.
+import { FilesetResolver, ImageSegmenter } from 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs';
+const HAIR=1,FACE_SKIN=3,cam=document.createElement('video');cam.muted=true;cam.playsInline=true;
+try{let stream=await navigator.mediaDevices.getUserMedia({video:true});
+  // prefer the Logitech webcam when there is one
+  const logi=(await navigator.mediaDevices.enumerateDevices()).find(d=>d.kind==='videoinput'&&/logi|c922|046d/i.test(d.label));
+  if(logi&&stream.getVideoTracks()[0].getSettings().deviceId!==logi.deviceId){stream.getTracks().forEach(t=>t.stop());stream=await navigator.mediaDevices.getUserMedia({video:{deviceId:{exact:logi.deviceId}}})}
+  cam.srcObject=stream;await cam.play();
+  const vision=await FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm');
+  const seg=await ImageSegmenter.createFromOptions(vision,{baseOptions:{modelAssetPath:'https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_multiclass_256x256/float32/latest/selfie_multiclass_256x256.tflite',delegate:'GPU'},
+    runningMode:'VIDEO',outputCategoryMask:true,outputConfidenceMasks:false});
+  const head=document.createElement('canvas'),hc=head.getContext('2d'),mask=document.createElement('canvas'),mc=mask.getContext('2d');let lastT=-1;
+  const cut=()=>{if(cam.readyState>=2&&cam.currentTime!==lastT){lastT=cam.currentTime;
+      seg.segmentForVideo(cam,performance.now(),r=>{const m=r.categoryMask,cats=m.getAsUint8Array();if(mask.width!==m.width){mask.width=m.width;mask.height=m.height}
+        const img=mc.createImageData(m.width,m.height);let x0=m.width,x1=-1,y0=m.height,y1=-1;
+        for(let i=0;i<cats.length;i++)if(cats[i]===HAIR||cats[i]===FACE_SKIN){img.data[i*4+3]=255;const x=i%m.width,y=(i/m.width)|0;if(x<x0)x0=x;if(x>x1)x1=x;if(y<y0)y0=y;if(y>y1)y1=y}
+        mc.putImageData(img,0,0);
+        if(x1>=0)window.headBox={x0:x0/m.width,x1:(x1+1)/m.width,y0:y0/m.height,y1:(y1+1)/m.height};
+        head.width=cam.videoWidth;head.height=cam.videoHeight;hc.drawImage(cam,0,0);
+        hc.globalCompositeOperation='destination-in';hc.filter='blur(2px)';hc.drawImage(mask,0,0,head.width,head.height);hc.filter='none';hc.globalCompositeOperation='source-over';
+        window.headCanvas=head})}
+    requestAnimationFrame(cut)};
+  cut()}catch(err){/* no camera: the mirror still shows the road behind */}
+</script>
+
+</body></html>
